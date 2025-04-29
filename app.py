@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import requests
 import json
+import os
+import openai
 from scipy.stats import rankdata
 from typing import List, Dict, Any
 
@@ -83,25 +85,55 @@ def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df['ebitda_margin'] = df['Ebitda'] / df['Revenues']
     df['rev_cagr_3yr'] = (df['Revenues'] / df['Revenues'].shift(3)) ** (1/3) - 1
-    for col in ['ebitda_margin', 'rev_cagr_3yr']:
+    df['ev_ebitda'] = df['MarketCapitalization'] / df['Ebitda']
+    df['debt_to_asset'] = df['Liabilities'] / df['Assets']
+    df['roa'] = df['Ebitda'] / df['Assets']
+    for col in ['ebitda_margin', 'rev_cagr_3yr', 'ev_ebitda', 'debt_to_asset', 'roa']:
         df[f'{col}_pct'] = rankdata(df[col].fillna(0), method='average') / len(df) * 100
     return df
 
 def generate_narrative(df: pd.DataFrame) -> str:
     """
-    Placeholder for OpenAI narrative generation using the KPI DataFrame.
+    Generate a 120-word narrative using OpenAI GPT based on the KPI DataFrame.
     """
-    return "[AI Narrative Placeholder]"
+    api_key = os.getenv('OPENAI_API_KEY') or st.secrets.get('OPENAI_API_KEY')
+    if not api_key:
+        st.error('OpenAI API key not configured.')
+        return ''
+    openai.api_key = api_key
+
+    data_json = df.to_json(orient='records')
+    system_msg = (
+        'You are a financial research analyst. '
+        'Given a JSON array of company KPI records, write a concise 120-word summary '
+        'highlighting valuation multiples, growth rates, and margin comparisons.'
+    )
+    user_msg = f"Here are the peer KPIs: {data_json}"
+
+    try:
+        response = openai.ChatCompletion.create(
+            model='gpt-3.5-turbo',
+            messages=[{'role':'system','content':system_msg}, {'role':'user','content':user_msg}],
+            temperature=0.2,
+            max_tokens=250
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        st.error(f"OpenAI request failed: {e}")
+        return ''
 
 # === Streamlit App ===
 def main():
     st.set_page_config(page_title="PeerLens Benchmark Studio", layout="wide")
     st.title("📊 PeerLens Benchmark Studio")
-    st.markdown("Upload peer tickers or a CSV of peers to benchmark key financial metrics and generate an AI narrative.")
+    st.markdown(
+        "Upload peer tickers or a CSV of peers to benchmark key financial metrics and generate an AI narrative."
+    )
 
     st.sidebar.header("Peer Inputs")
     tickers_input = st.sidebar.text_input("Comma-separated tickers, e.g. AAPL,MSFT")
     upload_csv = st.sidebar.file_uploader("Or upload CSV with a 'Ticker' column", type=['csv'])
+
     if st.sidebar.button("Generate Benchmark"):
         if upload_csv:
             df_peers = pd.read_csv(upload_csv)
@@ -136,7 +168,9 @@ def main():
         st.write(narrative)
 
         xlsx_data = df_kpis.to_excel(index=False)
-        st.sidebar.download_button("Download XLSX", data=xlsx_data, file_name="peer_kpis.xlsx")
+        st.sidebar.download_button(
+            "Download XLSX", data=xlsx_data, file_name="peer_kpis.xlsx"
+        )
         # TODO: implement PPTX export via python-pptx
 
 if __name__ == "__main__":
