@@ -2,21 +2,45 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import json
 from scipy.stats import rankdata
 from typing import List, Dict, Any
 
 # === Constants ===
 SEC_XBRL_BASE = "https://data.sec.gov/api/xbrl/companyfacts/"
+SEC_TICKER_CIK_URL = "https://www.sec.gov/files/company_tickers.json"
 USER_AGENT = "PeerLensBenchmarkStudio/0.1 (your_email@example.com)"
+
+# Cache for ticker→CIK mapping
+ticker_cik_map: Dict[str, str] = {}
 
 # === Helper Functions ===
 def fetch_public_filer_ciks(tickers: List[str]) -> Dict[str, str]:
     """
-    Given a list of tickers, fetch CIKs using SEC Company Tickers endpoint.
+    Given a list of tickers, fetch and cache CIKs using SEC's company_tickers.json.
     """
-    # TODO: implement mapping via SEC or third-party service
-    return {ticker: None for ticker in tickers}
-
+    global ticker_cik_map
+    if not ticker_cik_map:
+        headers = {"User-Agent": USER_AGENT}
+        resp = requests.get(SEC_TICKER_CIK_URL, headers=headers)
+        if resp.status_code == 200:
+            data = resp.json()
+            for record in data.values():
+                tic = record.get('ticker', '').upper()
+                cik_str = str(record.get('cik_str', '')).lstrip('0')
+                if tic and cik_str:
+                    ticker_cik_map[tic] = cik_str
+        else:
+            st.error(f"Failed to load ticker-CIK map: HTTP {resp.status_code}")
+    result: Dict[str, str] = {}
+    for tic in tickers:
+        cik = ticker_cik_map.get(tic)
+        if cik:
+            result[tic] = cik
+        else:
+            result[tic] = None
+            st.warning(f"CIK not found for ticker '{tic}'")
+    return result
 
 def fetch_xbrl_data(cik: str) -> Dict[str, Any]:
     """
@@ -27,91 +51,93 @@ def fetch_xbrl_data(cik: str) -> Dict[str, Any]:
     resp = requests.get(url, headers=headers)
     if resp.status_code == 200:
         return resp.json()
-    else:
-        st.error(f"Error fetching XBRL for CIK {cik}: HTTP {resp.status_code}")
-        return {}
-
+    st.error(f"Error fetching XBRL for CIK {cik}: HTTP {resp.status_code}")
+    return {}
 
 def extract_financials(xbrl_data: Dict[str, Any], facts: List[str]) -> Dict[str, float]:
     """
-    Extract latest values for requested fact names (e.g., 'Revenues', 'Ebitda').
+    Extract latest reported values for a list of US-GAAP facts from XBRL JSON.
     """
-    results = {}
-    # TODO: parse JSON structure to get LTM, TTMs, etc.
+    results: Dict[str, float] = {}
+    facts_dict = xbrl_data.get('facts', {}).get('us-gaap', {})
+    for fact in facts:
+        key = fact.lower() if fact.lower() in facts_dict else fact
+        item = facts_dict.get(key, {})
+        units = item.get('units', {})
+        value = np.nan
+        for unit_vals in units.values():
+            if isinstance(unit_vals, list) and unit_vals:
+                last = unit_vals[-1].get('v')
+                try:
+                    value = float(last)
+                except:
+                    value = np.nan
+                break
+        results[fact] = value
     return results
-
 
 def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Given a DataFrame of peer financials, calculate KPIs and percentiles.
+    Calculate KPI columns and percentile ranks on the raw financials.
     """
-    # Example: EBITDA margin, Revenue CAGR
+    df = df.copy()
     df['ebitda_margin'] = df['Ebitda'] / df['Revenues']
     df['rev_cagr_3yr'] = (df['Revenues'] / df['Revenues'].shift(3)) ** (1/3) - 1
-    # Compute percentile ranks
-    for col in ['ebitda_margin', 'rev_cagr_3yr', 'ev_ebitda']:
-        df[f'{col}_pct'] = rankdata(df[col], method='average') / len(df) * 100
+    for col in ['ebitda_margin', 'rev_cagr_3yr']:
+        df[f'{col}_pct'] = rankdata(df[col].fillna(0), method='average') / len(df) * 100
     return df
-
 
 def generate_narrative(df: pd.DataFrame) -> str:
     """
-    Call OpenAI API to generate a 120-word narrative based on KPI table.
+    Placeholder for OpenAI narrative generation using the KPI DataFrame.
     """
-    # TODO: integrate OpenAI GPT prompt with df.to_json()
-    narrative = "[AI Narrative Placeholder]"
-    return narrative
+    return "[AI Narrative Placeholder]"
 
 # === Streamlit App ===
-
 def main():
     st.set_page_config(page_title="PeerLens Benchmark Studio", layout="wide")
     st.title("📊 PeerLens Benchmark Studio")
-    st.markdown("Upload a list of peer tickers or CSV to benchmark key financial metrics and generate an AI narrative.")
+    st.markdown("Upload peer tickers or a CSV of peers to benchmark key financial metrics and generate an AI narrative.")
 
     st.sidebar.header("Peer Inputs")
-    tickers_input = st.sidebar.text_input("Enter tickers (comma-separated)")
-    upload_csv = st.sidebar.file_uploader("Or upload CSV with column 'Ticker'", type=['csv'])
-    generate_btn = st.sidebar.button("Generate Benchmark")
-
-    peers = []
-    if generate_btn:
-        if upload_csv is not None:
+    tickers_input = st.sidebar.text_input("Comma-separated tickers, e.g. AAPL,MSFT")
+    upload_csv = st.sidebar.file_uploader("Or upload CSV with a 'Ticker' column", type=['csv'])
+    if st.sidebar.button("Generate Benchmark"):
+        if upload_csv:
             df_peers = pd.read_csv(upload_csv)
-            peers = df_peers['Ticker'].dropna().unique().tolist()
-        elif tickers_input:
-            peers = [t.strip().upper() for t in tickers_input.split(',')]
-
-        if peers:
-            st.info(f"Fetching data for {len(peers)} peers...")
-            # 1. Map tickers to CIKs
-            cik_map = fetch_public_filer_ciks(peers)
-            # 2. Fetch XBRL and extract financials
-            records = []
-            facts = ['Revenues', 'Ebitda', 'Assets', 'Liabilities', 'MarketCapitalization']
-            for ticker in peers:
-                cik = cik_map.get(ticker)
-                if cik:
-                    xbrl = fetch_xbrl_data(cik)
-                    fin = extract_financials(xbrl, facts)
-                    fin['Ticker'] = ticker
-                    records.append(fin)
-            df_fin = pd.DataFrame(records)
-
-            # 3. Compute metrics & percentiles
-            df_kpis = compute_metrics(df_fin)
-            st.dataframe(df_kpis)
-
-            # 4. Narrative
-            narrative = generate_narrative(df_kpis)
-            st.markdown("### AI-Generated Narrative")
-            st.write(narrative)
-
-            # 5. Export buttons
-            st.sidebar.download_button("Download XLSX", data=df_kpis.to_excel(index=False), file_name="peer_kpis.xlsx")
-            # TODO: Download PPTX implementation
+            peers = df_peers['Ticker'].astype(str).str.upper().tolist()
         else:
-            st.error("Please enter tickers or upload a CSV.")
+            peers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+
+        if not peers:
+            st.error("Please provide at least one ticker or upload a CSV.")
+            return
+
+        st.info(f"Fetching data for {len(peers)} peers...")
+        cik_map = fetch_public_filer_ciks(peers)
+
+        records: List[Dict[str, Any]] = []
+        facts = ['Revenues', 'Ebitda', 'Assets', 'Liabilities', 'MarketCapitalization']
+        for ticker in peers:
+            cik = cik_map.get(ticker)
+            if cik:
+                xbrl = fetch_xbrl_data(cik)
+                fin = extract_financials(xbrl, facts)
+                fin['Ticker'] = ticker
+                records.append(fin)
+        df_fin = pd.DataFrame(records)
+
+        df_kpis = compute_metrics(df_fin)
+        st.subheader("Peer KPI Table")
+        st.dataframe(df_kpis)
+
+        narrative = generate_narrative(df_kpis)
+        st.subheader("AI-Generated Narrative")
+        st.write(narrative)
+
+        xlsx_data = df_kpis.to_excel(index=False)
+        st.sidebar.download_button("Download XLSX", data=xlsx_data, file_name="peer_kpis.xlsx")
+        # TODO: implement PPTX export via python-pptx
 
 if __name__ == "__main__":
     main()
