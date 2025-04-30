@@ -9,6 +9,8 @@ from scipy.stats import rankdata
 from io import BytesIO
 from typing import List, Dict, Any
 
+openai.api_key = st.secrets["openai"]["api_key"]
+
 # === Constants ===
 SEC_XBRL_BASE      = "https://data.sec.gov/api/xbrl/companyfacts/"
 SEC_TICKER_CIK_URL = "https://www.sec.gov/files/company_tickers.json"
