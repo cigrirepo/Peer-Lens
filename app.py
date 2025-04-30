@@ -12,14 +12,14 @@ from typing import List, Dict, Any
 # === Constants ===
 SEC_XBRL_BASE      = "https://data.sec.gov/api/xbrl/companyfacts/"
 SEC_TICKER_CIK_URL = "https://www.sec.gov/files/company_tickers.json"
-USER_AGENT         = "PeerLensBenchmarkStudio/1.0 (adamcigri@gmail.com)"
+USER_AGENT         = "PeerLensBenchmarkStudio/1.0 (your_email@example.com)"
 
 FACT_TAGS = {
     "Revenues": "Revenues",
     "EBITDA": "EarningsBeforeInterestTaxesDepreciationAndAmortization",
     "Assets": "Assets",
     "Liabilities": "Liabilities"
-    # MarketCapitalization handled via yfinance fallback
+    # MarketCapitalization will be fetched via yfinance fallback
 }
 
 # === Caching API responses ===
@@ -32,13 +32,13 @@ def load_ticker_cik_map() -> Dict[str, str]:
     for rec in data.values():
         tic = rec.get("ticker", "").upper()
         cik_raw = rec.get("cik_str", "")
-        if tic and cik_raw:
-            mapping[tic] = cik_raw.zfill(10)
+        if tic and cik_raw is not None:
+            mapping[tic] = str(cik_raw).zfill(10)
     return mapping
 
 @st.cache_data(ttl=24 * 3600)
 def fetch_xbrl_facts(cik10: str) -> Dict[str, Any]:
-    # Must prefix the filename with 'CIK'
+    # SEC requires the literal "CIK" prefix in the filename
     url = f"{SEC_XBRL_BASE}CIK{cik10}.json"
     resp = requests.get(url, headers={"User-Agent": USER_AGENT})
     if resp.status_code == 200:
@@ -100,7 +100,7 @@ def main():
     st.title("📊 PeerLens Benchmark Studio")
     st.sidebar.header("Peer Inputs")
 
-    t_input = st.sidebar.text_input(
+    tickers_input = st.sidebar.text_input(
         "Tickers (comma-separated)",
         placeholder="e.g. AAPL, MSFT, NFLX"
     )
@@ -116,7 +116,7 @@ def main():
                 st.error(f"CSV read error: {e}")
                 return
         else:
-            peers = [t.strip().upper() for t in t_input.split(",") if t.strip()]
+            peers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
         if not peers:
             st.error("Please provide at least one ticker or upload a CSV.")
@@ -147,7 +147,7 @@ def main():
 
         df = pd.DataFrame(records)
         if df.empty:
-            st.error("No financial data retrieved. Check tickers.")
+            st.error("No financial data retrieved. Check your tickers.")
             return
 
         df_kpis = compute_kpis(df)
@@ -158,7 +158,6 @@ def main():
         st.subheader("AI-Generated Narrative")
         st.write(generate_narrative(df_kpis))
 
-        # Excel export
         buf = BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             df_kpis.to_excel(writer, index=False, sheet_name="KPIs")
