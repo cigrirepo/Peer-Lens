@@ -37,7 +37,7 @@ def load_ticker_cik_map() -> Dict[str, str]:
 
 @st.cache_data(ttl=24*3600)
 def fetch_xbrl_facts(cik: str) -> Dict[str, Any]:
-    # Drop "CIK" prefix: use zero-padded CIK only
+    # <--- NO "CIK" PREFIX HERE
     url = f"{SEC_XBRL_BASE}{cik}.json"
     resp = requests.get(url, headers={"User-Agent": USER_AGENT})
     if resp.status_code == 200:
@@ -51,11 +51,10 @@ def extract_financials(usg: Dict[str, Any]) -> Dict[str, float]:
     for label, tag in FACT_TAGS.items():
         val = np.nan
         block = usg.get(tag, {})
-        # explicitly look for USD units
-        usd_array = block.get("units", {}).get("USD", [])
-        if usd_array:
+        usd = block.get("units", {}).get("USD", [])
+        if usd:
             try:
-                val = float(usd_array[-1].get("v", np.nan))
+                val = float(usd[-1].get("v", np.nan))
             except:
                 val = np.nan
         out[label] = val
@@ -83,19 +82,18 @@ def generate_narrative(df: pd.DataFrame) -> str:
     messages = [
         {"role": "system", "content": "You are a seasoned financial analyst."},
         {"role": "user", "content":
-            "Here are peer KPI records:\n"
-            f"{records}\n\n"
+            f"Peer KPI data:\n{records}\n\n"
             "Write a concise 120-word summary comparing valuation multiples, margins, and growth."
         }
     ]
 
-    response = openai.chat.completions.create(
+    resp = openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=messages,
         temperature=0.2,
         max_tokens=250
     )
-    return response.choices[0].message.content.strip()
+    return resp.choices[0].message.content.strip()
 
 # === Streamlit App ===
 def main():
@@ -105,7 +103,7 @@ def main():
 
     tickers_input = st.sidebar.text_input(
         "Tickers (comma-separated)",
-        placeholder="e.g. AAPL, MSFT, GOOG"
+        placeholder="e.g. AAPL, MSFT, NFLX"
     )
     upload_csv = st.sidebar.file_uploader(
         "Or upload CSV with 'Ticker' column",
@@ -113,19 +111,19 @@ def main():
     )
 
     if st.sidebar.button("Generate Benchmark"):
-        # Build peer list
+        # build peer list
         if upload_csv:
             try:
                 df_in = pd.read_csv(upload_csv)
                 peers = df_in["Ticker"].astype(str).str.upper().tolist()
             except Exception as e:
-                st.error(f"Error reading CSV: {e}")
+                st.error(f"CSV error: {e}")
                 return
         else:
             peers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
-        if not peers:
-            st.error("Please provide tickers or upload a CSV.")
+        if len(peers) < 1:
+            st.error("Please enter at least one ticker or upload a CSV.")
             return
 
         st.info(f"Fetching XBRL data for {len(peers)} peers…")
@@ -135,12 +133,12 @@ def main():
         for t in peers:
             cik = mapping.get(t)
             if not cik:
-                st.warning(f"No CIK found for ticker '{t}'")
+                st.warning(f"No CIK found for {t}")
                 continue
 
             usg = fetch_xbrl_facts(cik)
             if not usg:
-                st.warning(f"No XBRL facts for '{t}'")
+                st.warning(f"No XBRL facts for {t}")
 
             fin = extract_financials(usg)
             fin["Ticker"] = t
@@ -148,7 +146,7 @@ def main():
 
         df_fin = pd.DataFrame(records)
         if df_fin.empty:
-            st.error("No financial data retrieved. Check your tickers.")
+            st.error("No financial data retrieved. Check tickers or try a CSV.")
             return
 
         df_kpis = compute_kpis(df_fin)
@@ -172,4 +170,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
