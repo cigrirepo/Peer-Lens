@@ -37,11 +37,12 @@ def load_ticker_cik_map() -> Dict[str, str]:
 
 @st.cache_data(ttl=24*3600)
 def fetch_xbrl_facts(cik: str) -> Dict[str, Any]:
-    url = f"{SEC_XBRL_BASE}CIK{cik}.json"
+    # Drop "CIK" prefix: use zero-padded CIK only
+    url = f"{SEC_XBRL_BASE}{cik}.json"
     resp = requests.get(url, headers={"User-Agent": USER_AGENT})
     if resp.status_code == 200:
         return resp.json().get("facts", {}).get("us-gaap", {})
-    st.error(f"Failed to fetch XBRL for CIK {cik}: HTTP {resp.status_code}")
+    st.error(f"SEC XBRL fetch failed for CIK {cik}: HTTP {resp.status_code}")
     return {}
 
 # === Extraction & Metrics ===
@@ -50,7 +51,7 @@ def extract_financials(usg: Dict[str, Any]) -> Dict[str, float]:
     for label, tag in FACT_TAGS.items():
         val = np.nan
         block = usg.get(tag, {})
-        # explicitly look for USD
+        # explicitly look for USD units
         usd_array = block.get("units", {}).get("USD", [])
         if usd_array:
             try:
@@ -171,3 +172,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
