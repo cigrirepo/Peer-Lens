@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -159,12 +158,3 @@ def main():
 
 if __name__=='__main__':
     main()
-```
-
-**Changes:**
-- **Fallback to yfinance** when XBRL returns no data, eliminating blanks.  
-- **Fixed SEC endpoint** to prefix `CIK` + zero-padded CIK (10 digits).  
-- **Improved narrative prompt** to create bullet summaries.  
-
-
-
