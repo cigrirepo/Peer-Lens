@@ -12,7 +12,7 @@ from typing import List, Dict, Any
 # === Constants ===
 SEC_XBRL_BASE      = "https://data.sec.gov/api/xbrl/companyfacts/"
 SEC_TICKER_CIK_URL = "https://www.sec.gov/files/company_tickers.json"
-USER_AGENT         = "PeerLensBenchmarkStudio/1.0 (your_email@example.com)"
+USER_AGENT         = "PeerLensBenchmarkStudio/1.0 (adamcigri@gmail.com)"
 
 FACT_TAGS = {
     "Revenues": "Revenues",
