@@ -6,7 +6,7 @@ import json
 import os
 import openai
 import yfinance as yf
-from yfinance.exceptions import YFRatelimitError
+from yfinance.exceptions
 from scipy.stats import rankdata
 from io import BytesIO
 from typing import List, Dict, Any
