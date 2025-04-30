@@ -9,7 +9,6 @@ from scipy.stats import rankdata
 from io import BytesIO
 from typing import List, Dict, Any
 
-
 # === Constants ===
 SEC_XBRL_BASE      = "https://data.sec.gov/api/xbrl/companyfacts/"
 SEC_TICKER_CIK_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -32,8 +31,7 @@ def fetch_public_filer_ciks(tickers: List[str]) -> Dict[str, str]:
                 tic = str(record.get('ticker', '')).upper()
                 cik_raw = record.get('cik_str', '')
                 if tic and cik_raw != '':
-                    cik_str = str(cik_raw).zfill(10)
-                    ticker_cik_map[tic] = cik_str
+                    ticker_cik_map[tic] = str(cik_raw).zfill(10)
         else:
             st.error(f"Failed to load ticker-CIK map: HTTP {resp.status_code}")
     result = {}
@@ -48,9 +46,9 @@ def fetch_public_filer_ciks(tickers: List[str]) -> Dict[str, str]:
 
 def fetch_xbrl_data(cik: str) -> Dict[str, Any]:
     """
-    Retrieve XBRL JSON for a CIK.
+    Retrieve XBRL JSON for a CIK (must prefix with 'CIK').
     """
-    url = f"{SEC_XBRL_BASE}{cik}.json"
+    url = f"{SEC_XBRL_BASE}CIK{cik}.json"
     resp = requests.get(url, headers={"User-Agent": USER_AGENT})
     if resp.status_code == 200:
         return resp.json()
@@ -98,32 +96,36 @@ def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
 def generate_narrative(df: pd.DataFrame) -> str:
     """
-    OpenAI narrative from KPI DataFrame.
+    Generate a ~120-word narrative using the OpenAI Python ≥1.0.0 interface.
     """
     api_key = os.getenv('OPENAI_API_KEY') or st.secrets.get('OPENAI_API_KEY')
     if not api_key:
         st.error('OpenAI API key not configured.')
         return ''
     openai.api_key = api_key
+
     data = df.to_json(orient='records')
     messages = [
-        {'role':'system','content':(
-            'You are an expert financial analyst. '
-            'Summarize the following peer KPI JSON in ~120 words.'
+        {"role": "system", "content": (
+            "You are an expert financial analyst. "
+            "Summarize the following peer KPI JSON in approximately 120 words, "
+            "highlighting valuation multiples, growth rates, and margin comparisons."
         )},
-        {'role':'user','content': data}
+        {"role": "user", "content": data}
     ]
+
     try:
-        res = openai.ChatCompletion.create(
-            model='gpt-3.5-turbo',
+        # New style for openai-python ≥1.0.0
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=messages,
             temperature=0.2,
             max_tokens=250
         )
-        return res.choices[0].message.content.strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"OpenAI error: {e}")
-        return ''
+        return ""
 
 # === Streamlit App ===
 def main():
@@ -147,13 +149,13 @@ def main():
 
         st.info(f"Fetching data for {len(peers)} peers...")
         cik_map = fetch_public_filer_ciks(peers)
+
         records = []
         facts   = ['Revenues','Ebitda','Assets','Liabilities','MarketCapitalization']
-
         for t in peers:
-            cik = cik_map.get(t)
-            xbrl = fetch_xbrl_data(cik) if cik else {}
-            fin = extract_financials(xbrl, facts)
+            cik   = cik_map.get(t)
+            xbrl  = fetch_xbrl_data(cik) if cik else {}
+            fin   = extract_financials(xbrl, facts)
             fin['Ticker'] = t
             records.append(fin)
 
